@@ -17,7 +17,6 @@ class ListSource(input:Seq[Event]) extends SourceFunction[Event]{
     }
 
   }
-
   override def cancel(): Unit = {
 
   }
