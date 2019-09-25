@@ -1,32 +1,17 @@
 package com.example
 
-import com.example.sink.Writer
-import com.example.source.ListSource
-import com.example.windowing.SessionProcessFunction
 import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.scala.{DataStream, StreamExecutionEnvironment}
+import org.apache.flink.streaming.api.functions.source.SourceFunction
+import org.apache.flink.streaming.api.scala.function.ProcessWindowFunction
+import org.apache.flink.streaming.api.scala.{DataStream, StreamExecutionEnvironment, _}
+import org.apache.flink.streaming.api.watermark.Watermark
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows
 import org.apache.flink.streaming.api.windowing.time.Time
-import org.apache.flink.streaming.api.scala._
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow
+import org.apache.flink.util.Collector
 
 object App {
 
-  lazy val defaultList: Seq[Event] = Seq(
-    Event("u1", "e1", 1L), //s1
-//    Event("u2", "e2", 1L),
-    Event("u1", "e3", 3L), //s1
-//    Event("u2", "e4", 5L),
-    Event("u1", "e5", 6L), //s1
-//    Event("u2", "e6", 10L),
-    Event("u1", "e7", 11L), //s2
-    Event("u1", "e8", 12L), //s2
-    Event("u1", "e9", 16L), //s2
-//    Event("u2", "e10", 13L),
-    Event("u1", "e11", 14L), //s2
-    Event("u1", "e12", 7L),  // late event discarded , gotcha!
-    Event("u1", "e13", 20L),  // late event discarded , gotcha!
-
-  )
 
   def main(args: Array[String]): Unit = {
     val env = StreamExecutionEnvironment.getExecutionEnvironment
@@ -35,25 +20,52 @@ object App {
     env.setParallelism(2)
 
 
-    val source: DataStream[Event] = env.addSource(new ListSource(defaultList))
+    val source: DataStream[Event] = env.addSource(new SourceFunction[Event] {
+      lazy val input: Seq[Event] = Seq(
+        Event("u1", "e1", 1L),
+        Event("u1", "e5", 6L),
+        Event("u1", "e7", 11L),
+        Event("u1", "e8", 12L),
+        Event("u1", "e9", 16L),
+        Event("u1", "e11", 14L),
+        Event("u1", "e12", 8L),
+        Event("u1", "e13", 20L),
+      )
+
+      override def run(ctx: SourceFunction.SourceContext[Event]): Unit = {
+        {
+          input.foreach(event => {
+            ctx.collectWithTimestamp(event, event.timestamp)
+            ctx.emitWatermark(new Watermark(event.timestamp - 1))
+          })
+          ctx.emitWatermark(new Watermark(Long.MaxValue))
+        }
+      }
+
+      override def cancel(): Unit = {}
+    })
 
     val tag: OutputTag[Event] = OutputTag("late-data")
-    // We create sessions for each id with max timeout of 3 time units
+
     val sessionizedStream: DataStream[Event] = source
       .keyBy(item => item.userId)
       .window(EventTimeSessionWindows.withGap(Time.milliseconds(3L)))
       .sideOutputLateData(tag)
-      .allowedLateness(Time.milliseconds(4))
-      .process(new SessionProcessFunction)
+      .allowedLateness(Time.milliseconds(1))
+      .process(new ProcessWindowFunction[Event, Event, String, TimeWindow] {
 
+        override def process(key: String, context: Context, elements: Iterable[Event], out: Collector[Event]): Unit = {
+          val sessionIdForWindow = key + "-" + context.currentWatermark + "-" + context.window.getStart
 
-    val writer = new Writer(env)
+          elements.toSeq
+            .sortBy(event => event.timestamp)
+            .foreach(event => {
+              out.collect(event.copy(sessionId = sessionIdForWindow, count = elements.size))
+            })
+        }
+      })
 
-    writer.toConsole(sessionizedStream)
-
-    writer.toConsole(sessionizedStream.getSideOutput(tag))
-
-
+    sessionizedStream.getSideOutput(tag).print()
     env.execute()
   }
 }
