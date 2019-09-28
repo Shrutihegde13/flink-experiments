@@ -1,14 +1,15 @@
 package com.example
 
 import com.example.sink.Writer
-import com.example.source.{Deserializer, FileSource, ListSource, StreamProvider}
+import com.example.source.StreamProvider
 import com.example.windowing.{SessionCountFunction, SessionProcessFunction}
+import org.apache.flink.contrib.streaming.state.RocksDBStateBackend
+import org.apache.flink.runtime.state.filesystem.FsStateBackend
 import org.apache.flink.streaming.api.TimeCharacteristic
-import org.apache.flink.streaming.api.scala.{DataStream, StreamExecutionEnvironment}
+import org.apache.flink.streaming.api.scala.{DataStream, StreamExecutionEnvironment, _}
 import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows
 import org.apache.flink.streaming.api.windowing.time.Time
-import org.apache.flink.streaming.api.scala._
-import org.apache.flink.streaming.api.windowing.triggers.{ContinuousEventTimeTrigger, CountTrigger}
+import org.apache.flink.streaming.api.windowing.triggers.ContinuousEventTimeTrigger
 
 object App {
 
@@ -35,8 +36,10 @@ object App {
     env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime)
     env.setParallelism(2)
 
+    setupStateManagement(env)
 
-    val source: DataStream[Event] = StreamProvider.fromFile("/user-events-1.csv", env)
+
+    val source: DataStream[Event] = StreamProvider.fromFile("/user-events.csv", env)
     //    val source: DataStream[Event] = StreamProvider.fromList(defaultList,env)
 
     val tag: OutputTag[Event] = OutputTag("late-data")
@@ -44,7 +47,6 @@ object App {
     val sessionizedStream: DataStream[EnrichedEvent] = source
       .keyBy(item => item.userId)
       .window(EventTimeSessionWindows.withGap(Time.milliseconds(3L)))
-      .trigger(ContinuousEventTimeTrigger.of(Time.milliseconds(2)))
       .sideOutputLateData(tag)
       .allowedLateness(Time.milliseconds(4))
       .process(new SessionProcessFunction)
@@ -63,5 +65,17 @@ object App {
     writer.toConsole(aggregatedStream)
 
     env.execute()
+  }
+
+  private def setupStateManagement(env: StreamExecutionEnvironment) = {
+    val checkpointLocation = "file:///tmp/flink-checkpoints"
+    val rocksDBStateBackend = new RocksDBStateBackend(checkpointLocation, true)
+    rocksDBStateBackend.setDbStoragePath("file:///tmp/rocksdb-files")
+    env.setStateBackend(rocksDBStateBackend)
+
+//    val fsStateBackend = new FsStateBackend(checkpointLocation, true)
+//    env.setStateBackend(fsStateBackend)
+
+    println(env.getStateBackend)
   }
 }

@@ -6,4 +6,6 @@ case class EnrichedEvent(
                           timestamp: Long,
                           sessionId: String = "",
                           count: Int = 1,
+                          channel:String = "",
+                          attributedChannel:String = "",
                           processingTime: String)
