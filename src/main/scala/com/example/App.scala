@@ -39,7 +39,7 @@ object App {
     setupStateManagement(env)
 
 
-    val source: DataStream[Event] = StreamProvider.fromFile("/user-events.csv", env)
+    val source: DataStream[Event] = StreamProvider.fromFile("/user-events-1.csv", env)
     //    val source: DataStream[Event] = StreamProvider.fromList(defaultList,env)
 
     val tag: OutputTag[Event] = OutputTag("late-data")
